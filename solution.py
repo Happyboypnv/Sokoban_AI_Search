@@ -1,6 +1,10 @@
-"""Student entry point. See README.md for the API and scoring rules."""
+
+from sokoban import sokoban_goal_state
+
+
 
 
 def solve(initial_state, timebound=120):
-    """Return a goal SokobanState with a valid parent chain, or False."""
-    raise NotImplementedError("Implement your Sokoban solver")
+    """Return the best goal found by ARA*, or False if no goal is found."""
+    raise NotImplementedError("You must implement this function in solution.py")
+    return
