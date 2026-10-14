@@ -32,12 +32,14 @@ def precompute_distance(initial_state):
                     queue.append((next_pos, dist + 1))
     return distances
 
+
 # tao ma tran chi phi 
 def build_cost_matrix(state, distances):
     boxes = list(state.boxes)
     storages = list(state.storage)
     n = len(boxes) 
-    matrix = [[float('inf')] * n for _ in range(n)]
+    INF = 999999
+    matrix = [[INF] * n for _ in range(n)]
     for i, box in enumerate(boxes):
         for j, storage in enumerate(storages) : 
             if box in distances[storage]:
@@ -45,26 +47,61 @@ def build_cost_matrix(state, distances):
 
     return matrix 
 
+def hungarian_algorithm(cost_matrix):
+    n=len(cost_matrix)
+    if n == 0 :
+        return 0 
+    u = [0] * (n+1) 
+    v = [0] * (n+1) 
+    p = [0] * (n+1) # luu index cua hang ghep cot j  
+    way = [0] * (n+1) 
+    for i in range(1, n+1):
+        p[0] = i 
+        j0 = 0 
+        minv = [float('inf')] * (n+1) 
+        used = [False] * (n+1) 
+        while p[j0] != 0 :
+            used[j0] = True 
+            i0 = p[j0]
+            delta = float('inf') 
+            j1 = 0 
+            # cap nhat mang minv 
+            for j in range(1, n+1):
+                if not used[j]:
+                    cur = cost_matrix[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0 
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+            # cap nhat cach nhan 
+            for j in range(n+1):
+                if used[j]:
+                    u[p[j]] += delta 
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta 
+            j0 = j1 
+        while j0 != 0:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+    # total ghep cao 
+    total_cost = 0 
+    for j in range(1, n+1):
+        if p[j] != 0:
+            total_cost += cost_matrix[p[j]-1][j-1] 
+
+    return total_cost
+
+
 def heuristic(state, distances):
 
     matrix = build_cost_matrix(state, distances)
     
-    total_cost = 0
-    used_cols = set()
-    
-    for i in range(len(matrix)):
-        min_val = float('inf')
-        best_j = -1
-        for j in range(len(matrix[i])):
-            if j not in used_cols and matrix[i][j] < min_val:
-                min_val = matrix[i][j]
-                best_j = j
-                
-        if best_j != -1:
-            total_cost += min_val
-            used_cols.add(best_j)
-            
-    return total_cost
+    return hungarian_algorithm(matrix)
+
 
 def solve(initial_state, timebound=120):
     # A* serach algorithm
@@ -158,3 +195,25 @@ def solve(initial_state, timebound=120):
                 
     return False
     """
+
+# hàm heuristic sử dụng bfs duyệt ngược từ đích về các thùng 
+# def heuristic(state, distances):
+   
+#     matrix = build_cost_matrix(state, distances)
+    
+#     total_cost = 0
+#     used_cols = set()
+    
+#     for i in range(len(matrix)):
+#         min_val = float('inf')
+#         best_j = -1
+#         for j in range(len(matrix[i])):
+#             if j not in used_cols and matrix[i][j] < min_val:
+#                 min_val = matrix[i][j]
+#                 best_j = j
+                
+#         if best_j != -1:
+#             total_cost += min_val
+#             used_cols.add(best_j)
+            
+#     return total_cost
