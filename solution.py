@@ -31,7 +31,89 @@ def precompute_distance(initial_state):
                     visited.add(next_pos)
                     queue.append((next_pos, dist + 1))
     return distances
+# Quét tìm ô deadlock 
+def get_dead_squares(state):
+    def is_wall(x, y):
+        # True nếu ô là tường hoặc nắm ngoài bản đồ 
+        return (x, y) in state.obstacles or x < 0 or x >= state.width or y < 0 or y >= state.height
+    
+    dead_squares = set() 
+    corners = set()
+    # Tìm Corner Deadlock 
+    for x in range(state.width):
+        for y in range(state.height):
+            pos = (x, y) 
+            if pos in state.obstacles or pos in state.storage:
+                continue
+            up = (x, y-1) in state.obstacles or (y-1) < 0
+            down = (x, y+1) in state.obstacles or (y+1) >= state.height 
+            left = (x-1, y) in state.obstacles or (x-1) < 0 
+            right = (x+1, y) in state.obstacles or (x+1) >= state.width
+            if (up or down) and (left or right):
+                dead_squares.add(pos) 
+                corners.add(pos)
 
+    # Tìm Edge Deadlock nối giữa 2 Corner Deadlock
+    corner_list = list(corners)
+    for i in range(len(corner_list)):
+        for j in range(i+1, len(corner_list)):
+            c1, c2 = corner_list[i], corner_list[j]
+            if c1[0] == c2[0]: 
+                x = c1[0] 
+                y_start, y_end = min(c1[1], c2[1]), max(c1[1], c2[1])
+                is_dead_edge = True 
+                has_wall_left, has_wall_right = True, True 
+                for y in range(y_start, y_end + 1):
+                    pos=(x,y)
+                    # Giữa cạnh có đích hoặc bị ngắt quãng
+                    if pos in state.obstacles or pos in state.storage:
+                        is_dead_edge = False 
+                        break 
+                    if not is_wall(x - 1, y): 
+                        has_wall_left = False
+                    if not is_wall(x + 1, y): 
+                        has_wall_right = False
+                if is_dead_edge and (has_wall_left or has_wall_right):
+                    for y in range(y_start, y_end + 1):
+                        dead_squares.add((x,y))
+
+            elif c1[1] == c2[1]:
+                y=c1[1] 
+                x_start, x_end = min(c1[0], c2[0]), max(c1[0], c2[0])
+                
+                is_dead_edge = True
+                has_wall_up, has_wall_down = True, True
+                
+                for x in range(x_start, x_end + 1):
+                    pos = (x, y)
+                    if pos in state.obstacles or pos in state.storage:
+                        is_dead_edge = False
+                        break
+                    if not is_wall(x, y - 1): has_wall_up = False
+                    if not is_wall(x, y + 1): has_wall_down = False
+                        
+                if is_dead_edge and (has_wall_up or has_wall_down):
+                    for x in range(x_start, x_end + 1):
+                        dead_squares.add((x, y))
+
+    return dead_squares 
+
+# Deadlokk động 
+def is_freeze_deadlock(state):
+    def is_blocked(x, y):
+        # Ô bị chặn nếu là tường , thùng , biên 
+        return (x, y) in state.obstacles or (x, y) in state.boxes or x < 0 or x >= state.width or y < 0 or y >= state.height
+
+    for box in state.boxes:
+        if box in state.storage:
+            continue 
+        x, y = box 
+        for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
+            # 3 ô còn lại tạo thành khối 2*2 đều bị chặn
+            if is_blocked(x + dx, y) and is_blocked(x, y + dy) and is_blocked(x + dx, y + dy):
+                return True  
+
+    return False
 
 # tao ma tran chi phi 
 def build_cost_matrix(state, distances):
@@ -107,6 +189,7 @@ def solve(initial_state, timebound=120):
     # A* serach algorithm
     start_time = time.time() 
     distances = precompute_distance(initial_state)
+    dead_squares = get_dead_squares(initial_state)
     pq = []
     # push trang thai dau tien vao
     heappush(pq, (heuristic(initial_state, distances), initial_state.index, initial_state))
@@ -126,8 +209,21 @@ def solve(initial_state, timebound=120):
 
         # mo rong cac trang thai con 
         for successor in current_state.successors() :
-            succ_key = successor.hashable_state() 
-            if succ_key not in visited: 
+            succ_key = successor.hashable_state()  
+            if succ_key not in visited:
+                is_deadlocked = False
+                # Deadlock tĩnh
+                for box in successor.boxes:
+                    if box in dead_squares:
+                        is_deadlocked = True 
+                        break
+
+                # Deadlock động 
+                if not is_deadlocked and is_freeze_deadlock(successor):
+                    is_deadlocked = True 
+
+                if is_deadlocked:
+                    continue
                 # f(n) = g(n) + h(n)
                 g_val = successor.gval
                 h_val = heuristic(successor, distances)
