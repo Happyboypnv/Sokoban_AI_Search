@@ -1,315 +1,271 @@
 import time
 from heapq import heappush, heappop
-from sokoban import sokoban_goal_state
 from collections import deque
+from sokoban import sokoban_goal_state
 
-# def distance(p1,p2):
-#     return abs(p1[0]-p2[0])+abs(p1[1]-p2[1])
+INF = 10 ** 6
 
+
+# 1. PULL-BFS TÍNH KHOẢNG CÁCH ĐẨY THỰC TẾ TỪ ĐÍCH
 def precompute_distance(initial_state):
     distances = {}
-    # duyet bfs nguoc tu o dich 
+    width, height = initial_state.width, initial_state.height
+    obstacles = initial_state.obstacles
+
     for storage in initial_state.storage:
-        distances[storage] = {}
-        queue = deque([(storage, 0)]) # toa do va khoang cach 
-        visited = set([storage])
+        distances[storage] = {storage: 0}
+        queue = deque([storage])
 
         while queue:
-            current_pos, dist = queue.popleft() 
-            distances[storage][current_pos] = dist 
-            # loang ra 4 huong 
-            for dx, dy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
-                next_pos = (current_pos[0] + dx, current_pos[1] + dy) 
-                if next_pos[0] < 0 or next_pos[0] >= initial_state.width: 
-                    continue 
-                if next_pos[1] < 0 or next_pos[1] >= initial_state.height:
-                    continue 
-                if next_pos in initial_state.obstacles:
-                    continue 
+            current_pos = queue.popleft()
+            dist = distances[storage][current_pos]
 
-                if next_pos not in visited:
-                    visited.add(next_pos)
-                    queue.append((next_pos, dist + 1))
+            for dx, dy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+                prev_box_pos = (current_pos[0] + dx, current_pos[1] + dy)
+                robot_pos = (current_pos[0] + 2 * dx, current_pos[1] + 2 * dy)
+
+                if not (0 <= prev_box_pos[0] < width and 0 <= prev_box_pos[1] < height):
+                    continue
+                if not (0 <= robot_pos[0] < width and 0 <= robot_pos[1] < height):
+                    continue
+                if prev_box_pos in obstacles or robot_pos in obstacles:
+                    continue
+
+                if prev_box_pos not in distances[storage]:
+                    distances[storage][prev_box_pos] = dist + 1
+                    queue.append(prev_box_pos)
+
     return distances
-# Quét tìm ô deadlock 
-def get_dead_squares(state):
-    def is_wall(x, y):
-        # True nếu ô là tường hoặc nắm ngoài bản đồ 
-        return (x, y) in state.obstacles or x < 0 or x >= state.width or y < 0 or y >= state.height
-    
-    dead_squares = set() 
-    corners = set()
-    # Tìm Corner Deadlock 
+
+
+# 2. XÁC ĐỊNH Ô DEADLOCK TĨNH TỰ ĐỘNG TỪ BẢNG KHOẢNG CÁCH 
+def get_dead_squares(state, distances):
+    dead_squares = set()
     for x in range(state.width):
         for y in range(state.height):
-            pos = (x, y) 
-            if pos in state.obstacles or pos in state.storage:
-                continue
-            up = (x, y-1) in state.obstacles or (y-1) < 0
-            down = (x, y+1) in state.obstacles or (y+1) >= state.height 
-            left = (x-1, y) in state.obstacles or (x-1) < 0 
-            right = (x+1, y) in state.obstacles or (x+1) >= state.width
-            if (up or down) and (left or right):
-                dead_squares.add(pos) 
-                corners.add(pos)
+            pos = (x, y)
+            if pos not in state.obstacles:
+                if all(pos not in distances[st] for st in state.storage):
+                    dead_squares.add(pos)
+    return dead_squares
 
-    # Tìm Edge Deadlock nối giữa 2 Corner Deadlock
-    corner_list = list(corners)
-    for i in range(len(corner_list)):
-        for j in range(i+1, len(corner_list)):
-            c1, c2 = corner_list[i], corner_list[j]
-            if c1[0] == c2[0]: 
-                x = c1[0] 
-                y_start, y_end = min(c1[1], c2[1]), max(c1[1], c2[1])
-                is_dead_edge = True 
-                has_wall_left, has_wall_right = True, True 
-                for y in range(y_start, y_end + 1):
-                    pos=(x,y)
-                    # Giữa cạnh có đích hoặc bị ngắt quãng
-                    if pos in state.obstacles or pos in state.storage:
-                        is_dead_edge = False 
-                        break 
-                    if not is_wall(x - 1, y): 
-                        has_wall_left = False
-                    if not is_wall(x + 1, y): 
-                        has_wall_right = False
-                if is_dead_edge and (has_wall_left or has_wall_right):
-                    for y in range(y_start, y_end + 1):
-                        dead_squares.add((x,y))
 
-            elif c1[1] == c2[1]:
-                y=c1[1] 
-                x_start, x_end = min(c1[0], c2[0]), max(c1[0], c2[0])
-                
-                is_dead_edge = True
-                has_wall_up, has_wall_down = True, True
-                
-                for x in range(x_start, x_end + 1):
-                    pos = (x, y)
-                    if pos in state.obstacles or pos in state.storage:
-                        is_dead_edge = False
-                        break
-                    if not is_wall(x, y - 1): has_wall_up = False
-                    if not is_wall(x, y + 1): has_wall_down = False
-                        
-                if is_dead_edge and (has_wall_up or has_wall_down):
-                    for x in range(x_start, x_end + 1):
-                        dead_squares.add((x, y))
+# 3. KIỂM TRA FREEZE DEADLOCK ĐỘNG (ITERATIVE UNFREEZING)
+def is_freeze_deadlock(state, dead_squares, pushed_box):
+    width, height = state.width, state.height
+    obstacles = state.obstacles
+    boxes = state.boxes
+    storages = state.storage
 
-    return dead_squares 
+    def is_wall(x, y):
+        return x < 0 or x >= width or y < 0 or y >= height or (x, y) in obstacles
 
-# Deadlokk động 
-def is_freeze_deadlock(state):
-    def is_blocked(x, y):
-        # Ô bị chặn nếu là tường , thùng , biên 
-        return (x, y) in state.obstacles or (x, y) in state.boxes or x < 0 or x >= state.width or y < 0 or y >= state.height
+    def is_axis_statically_blocked(x, y, dx, dy):
+        pos1, pos2 = (x - dx, y - dy), (x + dx, y + dy)
+        if is_wall(pos1[0], pos1[1]) or is_wall(pos2[0], pos2[1]):
+            return True
+        return pos1 in dead_squares and pos2 in dead_squares
 
-    for box in state.boxes:
-        if box in state.storage:
-            continue 
-        x, y = box 
-        for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-            # 3 ô còn lại tạo thành khối 2*2 đều bị chặn
-            if is_blocked(x + dx, y) and is_blocked(x, y + dy) and is_blocked(x + dx, y + dy):
-                return True  
+    # Gom cụm các thùng liên thông với thùng vừa đẩy
+    connected_boxes = {pushed_box}
+    stack = [pushed_box]
+    while stack:
+        bx, by = stack.pop()
+        for dx, dy in [(0, -1), (0, 1), (1, 0), (-1, 0)]:
+            nb = (bx + dx, by + dy)
+            if nb in boxes and nb not in connected_boxes:
+                connected_boxes.add(nb)
+                stack.append(nb)
 
-    return False
+    # Gỡ dần các thùng không bị khóa đồng thời cả 2 trục Ngang & Dọc
+    frozen_boxes = set(connected_boxes)
+    changed = True
+    while changed:
+        changed = False
+        for (bx, by) in list(frozen_boxes):
+            blocked_h = (
+                is_axis_statically_blocked(bx, by, 1, 0)
+                or (bx - 1, by) in frozen_boxes
+                or (bx + 1, by) in frozen_boxes
+            )
+            blocked_v = (
+                is_axis_statically_blocked(bx, by, 0, 1)
+                or (bx, by - 1) in frozen_boxes
+                or (bx, by + 1) in frozen_boxes
+            )
+            if not (blocked_h and blocked_v):
+                frozen_boxes.remove((bx, by))
+                changed = True
 
-# tao ma tran chi phi 
+    return any(box not in storages for box in frozen_boxes)
+
+
+# 4. MA TRẬN CHI PHÍ & THUẬT TOÁN HUNGARIAN (N THÙNG x M ĐÍCH)
 def build_cost_matrix(state, distances):
     boxes = list(state.boxes)
     storages = list(state.storage)
-    n = len(boxes) 
-    INF = 999999
-    matrix = [[INF] * n for _ in range(n)]
+    matrix = [[INF] * len(storages) for _ in range(len(boxes))]
     for i, box in enumerate(boxes):
-        for j, storage in enumerate(storages) : 
+        for j, storage in enumerate(storages):
             if box in distances[storage]:
-                matrix[i][j] = distances[storage][box] 
+                matrix[i][j] = distances[storage][box]
+    return matrix
 
-    return matrix 
 
 def hungarian_algorithm(cost_matrix):
-    n=len(cost_matrix)
-    if n == 0 :
-        return 0 
-    u = [0] * (n+1) 
-    v = [0] * (n+1) 
-    p = [0] * (n+1) # luu index cua hang ghep cot j  
-    way = [0] * (n+1) 
-    for i in range(1, n+1):
-        p[0] = i 
-        j0 = 0 
-        minv = [float('inf')] * (n+1) 
-        used = [False] * (n+1) 
-        while p[j0] != 0 :
-            used[j0] = True 
+    n = len(cost_matrix)
+    if n == 0:
+        return 0
+    m = len(cost_matrix[0])
+
+    u = [0] * (n + 1)
+    v = [0] * (m + 1)
+    p = [0] * (m + 1)
+    way = [0] * (m + 1)
+
+    for i in range(1, n + 1):
+        u[i] = min(cost_matrix[i - 1][j - 1] for j in range(1, m + 1))
+
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = [float('inf')] * (m + 1)
+        used = [False] * (m + 1)
+        while p[j0] != 0:
+            used[j0] = True
             i0 = p[j0]
-            delta = float('inf') 
-            j1 = 0 
-            # cap nhat mang minv 
-            for j in range(1, n+1):
+            delta = float('inf')
+            j1 = 0
+            for j in range(1, m + 1):
                 if not used[j]:
                     cur = cost_matrix[i0 - 1][j - 1] - u[i0] - v[j]
                     if cur < minv[j]:
                         minv[j] = cur
-                        way[j] = j0 
+                        way[j] = j0
                     if minv[j] < delta:
                         delta = minv[j]
                         j1 = j
-            # cap nhat cach nhan 
-            for j in range(n+1):
+            for j in range(m + 1):
                 if used[j]:
-                    u[p[j]] += delta 
+                    u[p[j]] += delta
                     v[j] -= delta
                 else:
-                    minv[j] -= delta 
-            j0 = j1 
+                    minv[j] -= delta
+            j0 = j1
         while j0 != 0:
             j1 = way[j0]
             p[j0] = p[j1]
             j0 = j1
-    # total ghep cao 
-    total_cost = 0 
-    for j in range(1, n+1):
-        if p[j] != 0:
-            total_cost += cost_matrix[p[j]-1][j-1] 
 
-    return total_cost
+    total_cost = sum(cost_matrix[p[j] - 1][j - 1] for j in range(1, m + 1) if p[j] != 0)
+    return min(total_cost, INF)
 
 
-def heuristic(state, distances):
+def heuristic(state, distances, heuristic_cache):
+    boxes_key = frozenset(state.boxes)
+    if boxes_key in heuristic_cache:
+        return heuristic_cache[boxes_key]
 
-    matrix = build_cost_matrix(state, distances)
-    
-    return hungarian_algorithm(matrix)
+    if len(state.boxes) == 1:
+        box = next(iter(state.boxes))
+        h_val = min((distances[st].get(box, INF) for st in state.storage), default=INF)
+    else:
+        matrix = build_cost_matrix(state, distances)
+        h_val = hungarian_algorithm(matrix)
+
+    heuristic_cache[boxes_key] = h_val
+    return h_val
 
 
+# 5. THUẬT TOÁN TÌM KIẾM ANYTIME WEIGHTED A* (ARA*)
 def solve(initial_state, timebound=120):
-    # A* serach algorithm
-    start_time = time.time() 
+    if timebound is None or timebound <= 0:
+        return False
+    if sokoban_goal_state(initial_state):
+        return initial_state
+
+    start_time = time.monotonic()
+    deadline = start_time + 0.85 * timebound
+
     distances = precompute_distance(initial_state)
-    dead_squares = get_dead_squares(initial_state)
-    pq = []
-    # push trang thai dau tien vao
-    heappush(pq, (heuristic(initial_state, distances), initial_state.index, initial_state))
-    visited = set()
-    while pq: 
-        if time.time()-start_time>timebound:
+    dead_squares = get_dead_squares(initial_state, distances)
+    heuristic_cache = {}
+
+    if len(initial_state.boxes) > len(initial_state.storage):
+        return False
+    for box in initial_state.boxes:
+        if box in dead_squares:
             return False
-        f_score, c_index, current_state = heappop(pq) 
+        if box not in initial_state.storage and is_freeze_deadlock(initial_state, dead_squares, box):
+            return False
 
-        if sokoban_goal_state(current_state):
-            return current_state 
-        # xu ly de tranh trung lap
-        state_key = current_state.hashable_state() 
-        if state_key in visited:
-            continue 
-        visited.add(state_key)
+    h0 = heuristic(initial_state, distances, heuristic_cache)
+    if h0 >= INF:
+        return False
 
-        # mo rong cac trang thai con 
-        for successor in current_state.successors() :
-            succ_key = successor.hashable_state()  
-            if succ_key not in visited:
-                is_deadlocked = False
-                # Deadlock tĩnh
-                for box in successor.boxes:
-                    if box in dead_squares:
-                        is_deadlocked = True 
-                        break
+    best_goal_state = False
+    best_cost = INF
+    weights = (6, 3, 2, 1.5, 1.2, 1)
 
-                # Deadlock động 
-                if not is_deadlocked and is_freeze_deadlock(successor):
-                    is_deadlocked = True 
+    for w in weights:
+        pq = []
+        heappush(pq, (w * h0, h0, initial_state.index, initial_state))
+        best_g = {initial_state.hashable_state(): 0}
+        found_better = False
+        expansions = 0
 
-                if is_deadlocked:
+        while pq:
+            expansions += 1
+            if expansions % 128 == 0 and time.monotonic() > deadline:
+                return best_goal_state
+
+            f_score, h_val, c_index, current_state = heappop(pq)
+            g_val = current_state.gval
+
+            if g_val + h_val >= best_cost:
+                continue
+            if best_g.get(current_state.hashable_state(), INF) < g_val:
+                continue
+
+            for successor in current_state.successors():
+                succ_g = successor.gval
+                pushed_boxes = successor.boxes - current_state.boxes
+
+                # Chỉ kiểm tra Deadlock và tính lại Heuristic khi có thùng bị đẩy
+                if pushed_boxes:
+                    pushed_box = next(iter(pushed_boxes))
+                    if sokoban_goal_state(successor):
+                        if succ_g < best_cost:
+                            best_cost = succ_g
+                            best_goal_state = successor
+                            found_better = True
+                            if w > 1:
+                                break
+                        continue
+
+                    if pushed_box in dead_squares or is_freeze_deadlock(successor, dead_squares, pushed_box):
+                        continue
+
+                    succ_h = heuristic(successor, distances, heuristic_cache)
+                    if succ_h >= INF:
+                        continue
+                else:
+                    succ_h = h_val
+
+                if succ_g + succ_h >= best_cost:
                     continue
-                # f(n) = g(n) + h(n)
-                g_val = successor.gval
-                h_val = heuristic(successor, distances)
-                f_val = g_val + h_val
-                heappush(pq, (f_val, successor.index, successor))
 
-    return False
+                succ_key = successor.hashable_state()
+                if best_g.get(succ_key, INF) <= succ_g:
+                    continue
+                best_g[succ_key] = succ_g
 
+                heappush(pq, (succ_g + w * succ_h, succ_h, successor.index, successor))
 
+            if found_better and w > 1:
+                break
 
-# def heuristic(state):
-#     total_cost = 0
-#     # tạo một bản sao danh sách đích 
-#     available_storage = list(state.storage)
-#     for box in state.boxes:
-#         # box goal 
-#         if box in available_storage:
-#             available_storage.remove(box) 
-#             continue 
-#         # tim distance min box
-#         min_dist = float('inf')
-#         best_storage = None
-#         for st in available_storage:
-#             d = distance(box, st) 
-#             if (d<min_dist) :
-#                 min_dist = d 
-#                 best_storage = st
-#         # total cost if true 
-#         if best_storage: 
-#             total_cost += min_dist
-#             available_storage.remove(best_storage)
+        if not found_better:
+            break
 
-#     return total_cost
-
-""" def solve(initial_state, timebound=120):
-    # Return the best goal found, or False if no goal is found.
-    start_time = time.time()
-    
-    queue = deque([initial_state])
-    
-    # Tập hợp visited lưu lại các cấu hình bản đồ đã đi qua để tránh lặp chu trình
-    visited = set()
-    visited.add(initial_state.hashable_state())
-    
-    while queue:
-        # Kiểm tra điều kiện ngắt thời gian để không bị quá hạn
-        if time.time() - start_time > timebound:
-            return False
-            
-        # Lấy trạng thái ở đầu hàng đợi ra (First-In, First-Out)
-        current_state = queue.popleft()
-        
-        # Nếu trạng thái hiện tại là đích, framework sẽ tự dò ngược chuỗi parent để lấy đường đi
-        if sokoban_goal_state(current_state):
-            return current_state
-            
-        # Sinh các trạng thái kế tiếp hợp lệ
-        for successor in current_state.successors():
-            succ_key = successor.hashable_state()
-            
-            # Nếu trạng thái này chưa từng được duyệt, thêm vào hàng đợi
-            if succ_key not in visited:
-                visited.add(succ_key)
-                queue.append(successor)
-                
-    return False
-    """
-
-# hàm heuristic sử dụng bfs duyệt ngược từ đích về các thùng 
-# def heuristic(state, distances):
-   
-#     matrix = build_cost_matrix(state, distances)
-    
-#     total_cost = 0
-#     used_cols = set()
-    
-#     for i in range(len(matrix)):
-#         min_val = float('inf')
-#         best_j = -1
-#         for j in range(len(matrix[i])):
-#             if j not in used_cols and matrix[i][j] < min_val:
-#                 min_val = matrix[i][j]
-#                 best_j = j
-                
-#         if best_j != -1:
-#             total_cost += min_val
-#             used_cols.add(best_j)
-            
-#     return total_cost
+    return best_goal_state
